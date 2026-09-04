@@ -29,11 +29,11 @@ def angle_difference(desired_bearing, current_bearing):
     difference = (difference + 180) % 360 - 180
     return difference
 def generate_command(angle_error):
-    if abs(angle_error) <= 10:
+    if abs(angle_error) <= 15:
         return "F"
-    elif 10 < angle_error <= 30:
+    elif 15 < angle_error <= 30:
         return "SR"
-    elif -30 <= angle_error < -10:
+    elif -30 <= angle_error < -15:
         return "SL"
     elif angle_error > 30:
         return "R"
