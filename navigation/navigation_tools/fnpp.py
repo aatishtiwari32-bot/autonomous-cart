@@ -3,9 +3,11 @@ def calculate_distance(point1, point2):
     lat1, lon1 = point1
     lat2, lon2 = point2
     lat1 = math.radians(lat1)
+    lon1 = math.radians(lon1)
     lat2 = math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
+    lon2 = math.radians(lon2)
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
     a = (
         math.sin(delta_lat / 2) ** 2
         +
@@ -19,7 +21,6 @@ def calculate_distance(point1, point2):
     )
     EARTH_RADIUS = 6371000
     return EARTH_RADIUS * c
-
 
 def polypoint(current_coords, points):
     if not points:

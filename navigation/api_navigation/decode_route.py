@@ -55,3 +55,11 @@ def extract_route_points(route_response):
     if not encoded:
         return []
     return decode_polyline(encoded)
+'''
+EXPECTED OUTPUT: 
+points = [{
+            "point": len(points) + 1,
+            "latitude": latitude / 100000.0,
+            "longitude": longitude / 100000.0
+        }]
+'''

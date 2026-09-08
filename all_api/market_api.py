@@ -29,21 +29,4 @@ market_goods = {
         }
     ]
 }
-@app.get("/marketplaces/{marketplace_id}/goods")
-def show_goods(marketplace_id: int):
-    return {
-        "marketplace_id": marketplace_id,
-        "goods": market_goods.get(
-            marketplace_id,
-            []
-        )
-    }
-@app.post("/marketplaces/order")
-def order_goods(data: OrderedGoods):
 
-    return {
-        "marketplace_id": data.marketplace_id,
-        "good": data.good,
-        "quantity": data.quantity,
-        "status": "ORDER_RECEIVED"
-    }

@@ -23,6 +23,7 @@ def extract_vertices(current_vertex, end_vertex, path, distance, result):
             result
         )
 def short_distance(kart_coords, target_coords):
+    ''' START AUR ENDING KE COORDINATES SE DONO KE RESPECTIVE VERTEX NIKAALE HAI '''
     start_vertex = cc(kart_coords)
     end_vertex = cc(target_coords)
     result = {}
@@ -41,12 +42,20 @@ def short_distance(kart_coords, target_coords):
         result,
         key=result.get
     )
+    final_result = result_convertor(result)
+
     return {
-        shortest_path: result[shortest_path]
+        final_result
     }
 '''
 output will be in from of:
 {
     ("A", "A1", "A2", "A6", "X", "W", "A7", "U", "J"): 746.69
 }
+WANTED OUTPUT:
+points = [{
+            "point": len(points) + 1,
+            "latitude": latitude / 100000.0,
+            "longitude": longitude / 100000.0
+        }]
 '''
