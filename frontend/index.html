@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AutoDrop autonomous delivery cart dashboard" />
+  <title>AutoDrop — User Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <div class="login-shell">
+      <div class="login-brand-panel">
+        <div class="brand-lockup">
+          <div class="brand-mark"><span class="brand-dot"></span><span class="brand-wheel wheel-one"></span><span class="brand-wheel wheel-two"></span><span class="brand-body"></span></div>
+          <div><div class="brand-name">Auto<span>Drop</span></div><div class="brand-subtitle">AUTONOMOUS DELIVERY CART</div></div>
+        </div>
+        <div class="login-copy">
+          <div class="eyebrow">AUTONOMOUS · RELIABLE · EFFICIENT</div>
+          <h1>Smarter Deliveries <span>for Better Campuses.</span></h1>
+          <p>Manage routes, monitor your kart and control autonomous campus deliveries from one workspace.</p>
+          <div class="login-features">
+            <div class="feature-item"><span class="feature-icon">↗</span><div><strong>Smart Navigation</strong><span>Google & self routing</span></div></div>
+            <div class="feature-item"><span class="feature-icon">□</span><div><strong>Contactless Delivery</strong><span>Built for campus logistics</span></div></div>
+            <div class="feature-item"><span class="feature-icon">✓</span><div><strong>Safe & Efficient</strong><span>Vision-assisted operation</span></div></div>
+          </div>
+        </div>
+        <div class="login-footline"><span>24/7 Operations</span><span>•</span><span>AI-assisted Navigation</span><span>•</span><span>Campus Mobility</span></div>
+      </div>
+
+      <div class="login-card-wrap">
+        <div class="login-card">
+          <div class="login-card-head">
+            <div class="mini-label">WELCOME TO</div>
+            <div class="login-logo">Auto<span>Drop</span></div>
+            <div class="login-card-subtitle">AUTONOMOUS DELIVERY CART</div>
+            <div class="login-divider"></div>
+            <h2>Welcome back</h2>
+            <p>Enter your Kart ID and password to access the dashboard.</p>
+          </div>
+          <form id="login-form" class="login-form">
+            <label class="field-label" for="kart-id">Kart ID</label>
+            <div class="input-wrap"><span class="input-icon">▣</span><input id="kart-id" type="text" autocomplete="username" placeholder="Enter your Kart ID" required /></div>
+            <label class="field-label" for="kart-password">Password</label>
+            <div class="input-wrap"><span class="input-icon">⌑</span><input id="kart-password" type="password" autocomplete="current-password" placeholder="Enter your password" required /><button id="toggle-password" class="icon-button" type="button" aria-label="Show password">◉</button></div>
+            <div id="login-error" class="form-error" hidden></div>
+            <button class="primary-button login-button" type="submit">Login <span>→</span></button>
+          </form>
+          <div class="login-secure"><span class="secure-icon">✓</span><div><strong>Secure Kart Access</strong><span>Only authenticated kart sessions can operate the dashboard.</span></div></div>
+          <div class="login-version">AutoDrop Dashboard · v1.0</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="app-shell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand"><div class="brand-mark compact"><span class="brand-dot"></span><span class="brand-wheel wheel-one"></span><span class="brand-wheel wheel-two"></span><span class="brand-body"></span></div><div><div class="brand-name dark">Auto<span>Drop</span></div><div class="brand-subtitle dark-sub">AUTONOMOUS DELIVERY</div></div></div>
+      <div class="sidebar-section"><div class="sidebar-caption">WORKSPACE</div>
+        <button class="nav-item active" data-page="navigation"><span>⌁</span><span>Navigation</span></button>
+        <button class="nav-item" data-page="kart-management"><span>□</span><span>Kart Management</span></button>
+        <button class="nav-item" data-page="profile"><span>◌</span><span>Profile</span></button>
+      </div>
+      <div class="sidebar-bottom">
+        <div class="connection-card"><span id="sidebar-status-dot" class="status-dot offline"></span><div><strong id="sidebar-status-text">Connecting</strong><span id="sidebar-kart-id">Kart —</span></div></div>
+        <button id="logout-button" class="sidebar-logout"><span>↪</span>Logout</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar"><div><div class="topbar-eyebrow">AUTODROP CONTROL CENTER</div><h2 id="page-title">Navigation</h2></div><div class="topbar-actions"><div class="api-pill" id="api-status-pill"><span class="status-dot offline"></span><span>API</span></div><div class="user-pill"><div class="avatar">K</div><div><strong id="topbar-kart-id">mark2</strong><span>Authorized Kart</span></div></div></div></header>
+      <div class="page-container">
+        <section id="page-navigation" class="page active-page">
+          <div class="page-intro"><div><div class="eyebrow dark-eyebrow">LIVE NAVIGATION</div><h3>Current Kart Location</h3><p>Live position will be populated from kart telemetry. Route controls remain available below.</p></div><div class="live-badge"><span class="status-dot offline"></span><span id="telemetry-label">Telemetry pending</span></div></div>
+          <div class="location-layout">
+            <div class="card map-card"><div class="card-header"><div><h4>Kart Location</h4><span>Live map view</span></div><span class="soft-chip" id="gps-chip">Waiting for GPS</span></div><div id="kart-map" class="map"></div><div class="location-metrics"><div><span>Location</span><strong id="kart-location-name">Waiting for telemetry</strong></div><div><span>Latitude</span><strong id="kart-latitude">—</strong></div><div><span>Longitude</span><strong id="kart-longitude">—</strong></div><div><span>Heading</span><strong id="kart-heading">—</strong></div><div><span>Speed</span><strong id="kart-speed">—</strong></div><div><span>Last update</span><strong id="kart-last-update">—</strong></div></div></div>
+            <div class="card current-route-card"><div class="card-header"><div><h4>Current Route</h4><span>Selected mission</span></div><span id="current-route-status" class="soft-chip neutral">No route</span></div><div class="route-chain empty-chain" id="current-route-chain"><div class="empty-state small"><div class="empty-icon">＋</div><strong>No active route</strong><span>Create a route to start navigation.</span></div></div><button id="route-from-nav" class="secondary-button full-width">Create New Route <span>→</span></button></div>
+          </div>
+          <div class="section-row"><div><h3 class="section-title">Previous Routes</h3><p class="section-subtitle">Routes created from this dashboard.</p></div><button id="clear-history" class="text-button">Clear history</button></div>
+          <div id="route-history" class="history-list"></div>
+          <button id="create-route-cta" class="route-cta"><span class="cta-icon">＋</span><div><strong>Create New Route</strong><span>Set user location, delivery point and final destination.</span></div><span class="cta-arrow">→</span></button>
+        </section>
+
+        <section id="page-create-route" class="page">
+          <div class="page-intro"><div><div class="eyebrow dark-eyebrow">ROUTE PLANNER</div><h3>Create New Route</h3><p>Choose the three mission locations and let the selected navigation mode drive each leg.</p></div></div>
+          <div class="route-editor-layout">
+            <div class="card route-form-card">
+              <div class="steps-header"><div class="step active"><span>1</span><div><strong>Locations</strong><small>Set the mission</small></div></div><div class="step-line"></div><div class="step"><span>2</span><div><strong>Mode</strong><small>Choose control</small></div></div><div class="step-line"></div><div class="step"><span>3</span><div><strong>Start</strong><small>Send command</small></div></div></div>
+              <div class="mission-point"><div class="point-number blue">1</div><div class="point-body"><div class="point-heading"><div><h4>User Location</h4><span>First destination after kart departure</span></div><span class="required-badge">Required</span></div><div class="coord-grid"><input id="user-lat" class="coord-input" type="number" step="any" placeholder="Latitude" /><input id="user-lng" class="coord-input" type="number" step="any" placeholder="Longitude" /></div><input id="user-name" class="text-input" type="text" placeholder="Location name (optional)" /></div></div>
+              <div class="connector-line"></div>
+              <div class="mission-point"><div class="point-number green">2</div><div class="point-body"><div class="point-heading"><div><h4>Delivery Point</h4><span>Destination where the delivery is completed</span></div><span class="required-badge">Required</span></div><div class="coord-grid"><input id="delivery-lat" class="coord-input" type="number" step="any" placeholder="Latitude" /><input id="delivery-lng" class="coord-input" type="number" step="any" placeholder="Longitude" /></div><input id="delivery-name" class="text-input" type="text" placeholder="Location name (optional)" /></div></div>
+              <div class="connector-line"></div>
+              <div class="mission-point"><div class="point-number purple">3</div><div class="point-body"><div class="point-heading"><div><h4>Final Destination</h4><span>Any valid final location</span></div><span class="required-badge">Required</span></div><div class="coord-grid"><input id="final-lat" class="coord-input" type="number" step="any" placeholder="Latitude" /><input id="final-lng" class="coord-input" type="number" step="any" placeholder="Longitude" /></div><input id="final-name" class="text-input" type="text" placeholder="Location name (optional)" /></div></div>
+              <div class="divider"></div>
+              <div class="mode-block"><div class="point-heading"><div><h4>Navigation Mode</h4><span>This decision comes from you.</span></div></div><div class="mode-grid"><button class="mode-card selected" data-mode="google"><span class="mode-card-icon">↗</span><div><strong>Google Route</strong><span>Use Google Routes for this mission</span></div><span class="mode-radio"></span></button><button class="mode-card" data-mode="self"><span class="mode-card-icon">⌘</span><div><strong>Self Route</strong><span>Use the mapped campus graph</span></div><span class="mode-radio"></span></button><button class="mode-card" data-mode="manual"><span class="mode-card-icon">✦</span><div><strong>Manual Control</strong><span>Send direct driving commands</span></div><span class="mode-radio"></span></button></div>
+                <div id="manual-controls" class="manual-controls" hidden><div class="manual-label">Manual command</div><div class="manual-pad"><button data-manual-command="F">F</button><div class="manual-row"><button data-manual-command="SL">SL</button><button data-manual-command="STOP" class="stop">STOP</button><button data-manual-command="SR">SR</button></div><button data-manual-command="R">R</button></div><div class="manual-extra"><button data-manual-command="L">L</button></div></div>
+              </div>
+              <div id="route-form-error" class="form-error" hidden></div><button id="send-route-command" class="primary-button full-width">Start Route <span>→</span></button>
+            </div>
+            <div class="card route-preview-card"><div class="card-header"><div><h4>Route Preview</h4><span>Location sequence</span></div><span class="soft-chip blue-chip">Live map</span></div><div id="route-preview-map" class="map preview-map"></div><div class="preview-legend"><div><span class="legend-dot blue"></span>User</div><div><span class="legend-dot green"></span>Delivery</div><div><span class="legend-dot purple"></span>Final</div></div></div>
+          </div>
+        </section>
+
+        <section id="page-kart-management" class="page">
+          <div class="page-intro"><div><div class="eyebrow dark-eyebrow">FLEET HEALTH</div><h3>Kart Management</h3><p>Monitor kart condition and send service requests.</p></div><div class="live-badge"><span id="management-status-dot" class="status-dot offline"></span><span id="management-status-text">Telemetry pending</span></div></div>
+          <div class="management-grid">
+            <div class="card kart-overview-card"><div class="card-header"><div><h4>Kart Condition</h4><span id="management-kart-id">mark2</span></div><span id="condition-chip" class="soft-chip neutral">Waiting for telemetry</span></div><div class="kart-condition-grid"><div class="condition-card"><span class="condition-title">Battery Life</span><strong id="battery-value">—</strong><div class="progress"><span id="battery-bar" style="width:0%"></span></div><small>Telemetry required</small></div><div class="condition-card"><span class="condition-title">Kart Status</span><strong>Authorized</strong><small>Dashboard session active</small></div><div class="condition-card"><span class="condition-title">Connection</span><strong id="connection-value">Checking</strong><small>API session status</small></div><div class="condition-card"><span class="condition-title">Service</span><strong>Ready</strong><small>Request assistance below</small></div></div></div>
+            <div class="card system-status-card"><div class="card-header"><div><h4>System Condition</h4><span>Module overview</span></div></div><div class="system-list"><div class="system-item"><span class="system-bullet"></span><div><strong>GPS</strong><small>Awaiting kart telemetry</small></div><span class="system-value">Pending</span></div><div class="system-item"><span class="system-bullet"></span><div><strong>Camera</strong><small>Backend controlled</small></div><span class="system-value">Backend</span></div><div class="system-item"><span class="system-bullet"></span><div><strong>Navigation</strong><small>Google / Self selectable</small></div><span class="system-value">Ready</span></div><div class="system-item"><span class="system-bullet"></span><div><strong>Control</strong><small>Manual commands supported</small></div><span class="system-value">Ready</span></div></div></div>
+            <div class="card service-card"><div class="card-header"><div><h4>Service Request</h4><span>Your request will be addressed to support.</span></div></div><form id="service-form"><label class="field-label" for="service-type">Issue type</label><select id="service-type" class="text-input"><option>General Service</option><option>Battery</option><option>Navigation / GPS</option><option>Camera / Sensor</option><option>Motor / Mechanical</option><option>Other</option></select><label class="field-label" for="service-message">Description</label><textarea id="service-message" class="text-area" rows="5" placeholder="Describe the issue or service request..." required></textarea><button class="primary-button full-width" type="submit">Send Service Request <span>↗</span></button><div class="mail-note">Opens your email client addressed to <strong>tiwariaatish24@gmail.com</strong>.</div></form></div>
+          </div>
+        </section>
+
+        <section id="page-profile" class="page">
+          <div class="page-intro"><div><div class="eyebrow dark-eyebrow">ACCOUNT</div><h3>Profile</h3><p>Account overview for your AutoDrop workspace.</p></div></div>
+          <div class="profile-grid">
+            <div class="card profile-hero"><div class="profile-avatar-large">A</div><div><div class="eyebrow dark-eyebrow">AUTODROP ACCOUNT</div><h4>AutoDrop User</h4><p>Authorized dashboard operator</p></div><div class="profile-kart-chip"><span class="status-dot online"></span><span id="profile-kart-id">mark2</span></div></div>
+            <div class="stat-row"><div class="card stat-card"><span>Number of Karts</span><strong>1</strong><small>Current dashboard assignment</small></div><div class="card stat-card"><span>Total Rides</span><strong>0</strong><small>Ride history starts from zero</small></div><div class="card stat-card"><span>Current Mode</span><strong id="profile-mode">—</strong><small>Latest dashboard selection</small></div></div>
+            <div class="card profile-list-card"><div class="profile-row"><div><strong>API Endpoint</strong><span id="profile-api-url">http://localhost:8000</span></div><span class="small-tag">Backend</span></div><div class="profile-row"><div><strong>Security</strong><span>Kart authentication required</span></div><span class="small-tag">Protected</span></div><div class="profile-row"><div><strong>Support</strong><span>tiwariaatish24@gmail.com</span></div><button class="text-button" id="support-link">Contact →</button></div></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="./app.js"></script>
+</body>
+</html>
