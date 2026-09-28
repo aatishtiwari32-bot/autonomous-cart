@@ -9,7 +9,6 @@ class Coordinates(BaseModel):
     longitude: float
 # KART PARAMETERS
 
-
 class KartParameters(BaseModel):
     camera_url: str
     kart_coordinates: Coordinates

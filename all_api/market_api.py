@@ -5,7 +5,6 @@ from marketplaces import
 app = FastAPI()
 class market_info(BaseModel):
     market_placeCoords : json
-    
 class MarketGoods(BaseModel):
     goods: str
     stock: int
@@ -29,4 +28,3 @@ market_goods = {
         }
     ]
 }
-
