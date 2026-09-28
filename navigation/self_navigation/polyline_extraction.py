@@ -1,37 +1,23 @@
 from .polyline import get_route_polyline
-
-
 # ============================================================
 # ROUTE RESULT → GPS POLYLINE
 # ============================================================
-
 def extract_polyline(route_result):
     """
     Convert a shortest-path result into a GPS waypoint list.
-
     Supported input formats
     ------------------------
-
     1. Result returned by short_distance():
-
         {
             ("A", "A1", "A2", "A6"): 280.5
         }
-
     2. A direct graph path:
-
         ("A", "A1", "A2", "A6")
-
     3. A list of vertices:
-
         ["A", "A1", "A2", "A6"]
-
-
     Returns
     -------
-
     list of dictionaries:
-
         [
             {
                 "point": 1,

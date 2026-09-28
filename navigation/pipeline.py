@@ -11,20 +11,15 @@ from .navigation_tools.fnpp import (
     calculate_distance,
     to_tuple,
 )
-
 from .other_tools.frame_extraction import get_frame
-
 from .self_navigation.distance_graph import juet_weighted_graph
 from .self_navigation.polyline import (
     polyline_database,
     polypoints_db,
 )
-
-
 # ============================================================
 # CONFIGURATION
 # ============================================================
-
 # Distance within which a destination is treated as reached.
 # We are using the 7m threshold for mission arrival.
 ARRIVAL_THRESHOLD = 3.5
@@ -845,31 +840,24 @@ def pipeline(
 ):
     """
     Main autonomous decision pipeline.
-
     Parameters
     ----------
     mp:
         Marketplace coordinates.
-
     k:
         Current kart coordinates.
-
     dp:
         Delivery destination.
-
     He:
         Current kart heading.
-
     sd:
         Routing mode:
             1 -> self/campus graph
             0 -> Google route
-
     Returns
     -------
     str:
         One movement command:
-
             F
             SR
             SL
