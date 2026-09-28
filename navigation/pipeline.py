@@ -1,37 +1,201 @@
+"""
+AUTONOMOUS DRIVING PIPELINE
+
+Responsibility
+--------------
+
+This module establishes autonomous driving between ONLY:
+
+    CURRENT KART LOCATION
+            ↓
+        TARGET LOCATION
+
+The higher-level Navigation API is responsible for deciding
+which target the kart should currently travel toward.
+
+For example:
+
+    Kart
+      ↓
+    User
+      ↓
+    Delivery
+      ↓
+    Final
+
+But pipeline knows nothing about this sequence.
+
+Pipeline only receives:
+
+    current_coords
+    target_coords
+    heading
+    routing_mode
+
+Routing mode:
+
+    0 -> Google Routes
+    1 -> Self / JUET graph
+
+Manual control is NOT handled here.
+
+The Navigation API handles manual commands directly.
+"""
+
+
+import os
+
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Optional
+from typing import Optional
 
-from .api_navigation.create_path import get_google_route
-from .api_navigation.decode_route import extract_route_points
 
-from .navigation_tools.navigate import navigate
-from .navigation_tools.movement import movement
+# ============================================================
+# GOOGLE NAVIGATION
+# ============================================================
+
+from .api_navigation.create_path import (
+    get_google_route,
+)
+
+from .api_navigation.decode_route import (
+    extract_route_points,
+)
+
+
+# ============================================================
+# AUTONOMOUS NAVIGATION
+# ============================================================
+
+from .navigation_tools.navigate import (
+    navigate,
+)
+
+from .navigation_tools.movement import (
+    movement,
+)
+
 from .navigation_tools.fnpp import (
     calculate_distance,
     to_tuple,
 )
-from .other_tools.frame_extraction import get_frame
-from .self_navigation.distance_graph import juet_weighted_graph
-from .self_navigation.polyline import (
-    polyline_database,
-    polypoints_db,
+
+
+# ============================================================
+# SELF NAVIGATION
+# ============================================================
+
+from .self_navigation.shortest_distance import (
+    short_distance,
 )
+
+from .self_navigation.polyline_extraction import (
+    extract_polyline,
+)
+
+
+# ============================================================
+# CAMERA
+# ============================================================
+
+from other_tools.frame_extraction import (
+    get_frame,
+)
+
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
-# Distance within which a destination is treated as reached.
-# We are using the 7m threshold for mission arrival.
-ARRIVAL_THRESHOLD = 3.5
 
 
-# Safety command used whenever routing fails or state is invalid.
+# ------------------------------------------------------------
+# Destination arrival threshold
+# ------------------------------------------------------------
+
+ARRIVAL_THRESHOLD = 7.0
+
+
+# ------------------------------------------------------------
+# Waypoint route modes
+# ------------------------------------------------------------
+
+GOOGLE_ROUTE = 0
+SELF_ROUTE = 1
+
+
+# ------------------------------------------------------------
+# Safe command
+# ------------------------------------------------------------
+
 SAFE_STOP_COMMAND = "STOP"
 
 
-# Supported routing modes
-SELF_ROUTE = 1
-GOOGLE_ROUTE = 0
+# ------------------------------------------------------------
+# Allowed final commands
+# ------------------------------------------------------------
+
+ALLOWED_COMMANDS = {
+    "F",
+    "SR",
+    "SL",
+    "R",
+    "L",
+    "STOP",
+}
+
+
+# ------------------------------------------------------------
+# Camera source
+# ------------------------------------------------------------
+#
+# Examples:
+#
+# USB camera:
+#     CAMERA_SOURCE=0
+#
+# IP camera:
+#     CAMERA_SOURCE=http://192.168.1.50:8080/video
+#
+# RTSP:
+#     CAMERA_SOURCE=rtsp://...
+#
+# ------------------------------------------------------------
+
+CAMERA_SOURCE = os.getenv(
+    "CAMERA_SOURCE",
+    "0",
+)
+
+
+# ------------------------------------------------------------
+# Pothole detection
+# ------------------------------------------------------------
+#
+# Pothole detector is enabled automatically when:
+#
+#     POTHOLE_DETECTION_ENABLED=true
+#
+# Otherwise it remains disabled.
+#
+# This prevents a missing pothole model from crashing the
+# complete autonomous navigation pipeline during development.
+#
+# ------------------------------------------------------------
+
+POTHOLE_DETECTION_ENABLED = (
+    os.getenv(
+        "POTHOLE_DETECTION_ENABLED",
+        "false",
+    )
+    .strip()
+    .lower()
+    in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+)
 
 
 # ============================================================
@@ -41,748 +205,890 @@ GOOGLE_ROUTE = 0
 @dataclass
 class PipelineState:
     """
-    Runtime state of the current delivery mission.
+    State of the current autonomous route.
 
-    This currently represents ONE robot.
-    Later, for fleet support, this state should become
-    robot_id -> PipelineState.
+    There is intentionally NO:
+
+        user/delivery/final
+
+    mission logic here.
+
+    Only one current route is maintained:
+
+        current position -> target
     """
 
-    active: bool = False
+    # --------------------------------------------------------
+    # Route identity
+    # --------------------------------------------------------
 
-    # Unique identity of the current mission.
-    mission_key: Optional[tuple] = None
+    route_key: Optional[tuple] = None
 
-    # Routing mode requested for the mission.
+
+    # --------------------------------------------------------
+    # Cached route points
+    # --------------------------------------------------------
+
+    route_points: list = field(
+        default_factory=list
+    )
+
+
+    # --------------------------------------------------------
+    # Current waypoint index
+    # --------------------------------------------------------
+
+    waypoint_index: int = 0
+
+
+    # --------------------------------------------------------
+    # Last selected route mode
+    # --------------------------------------------------------
+
     routing_mode: Optional[int] = None
 
-    # Actual routing source in use.
-    # Examples:
-    #   "self"
-    #   "google"
-    #   "self_fallback"
-    routing_source: Optional[str] = None
 
-    # Mission phase
-    #
-    # IDLE
-    # TO_PICKUP
-    # TO_DELIVERY
-    # COMPLETE
-    phase: str = "IDLE"
+    # --------------------------------------------------------
+    # Last command
+    # --------------------------------------------------------
 
-    # Route waypoint lists
-    receive_points: list = field(default_factory=list)
-    deliver_points: list = field(default_factory=list)
-
-    # Persistent waypoint indexes
-    receive_waypoint_index: int = 0
-    deliver_waypoint_index: int = 0
-
-    # Last command generated by pipeline
     last_command: str = SAFE_STOP_COMMAND
 
-    # Last routing error
+
+    # --------------------------------------------------------
+    # Last error
+    # --------------------------------------------------------
+
     last_error: Optional[str] = None
 
 
-# One-robot prototype state
+# ------------------------------------------------------------
+# Single-kart prototype state
+# ------------------------------------------------------------
+
 state = PipelineState()
 
-# Lock protects state because FastAPI/background calls can be concurrent.
+
+# ------------------------------------------------------------
+# Thread protection
+# ------------------------------------------------------------
+
 state_lock = Lock()
 
 
 # ============================================================
-# BASIC COORDINATE HELPERS
+# COMMAND HELPERS
 # ============================================================
 
-def _coordinate_dict(coords):
+def _normalize_command(
+    command,
+):
     """
-    Convert Pydantic/object/tuple/dict coordinates into
-    the internal graph format:
+    Convert a generated command into one of the project's
+    allowed commands.
 
-        {
-            "lats": latitude,
-            "longs": longitude
-        }
-
-    Used by the JUET graph resolver.
-    """
-
-    latitude, longitude = to_tuple(coords)
-
-    return {
-        "lats": latitude,
-        "longs": longitude
-    }
-
-
-def _mission_key(marketplace, delivery_point, routing_mode):
-    """
-    Build an identifier for the current mission.
-
-    Kart coordinates are intentionally NOT included because
-    kart coordinates change continuously during navigation.
-    """
-
-    marketplace_point = to_tuple(marketplace)
-    delivery_point_value = to_tuple(delivery_point)
-
-    return (
-        round(marketplace_point[0], 7),
-        round(marketplace_point[1], 7),
-        round(delivery_point_value[0], 7),
-        round(delivery_point_value[1], 7),
-        int(routing_mode),
-    )
-
-
-# ============================================================
-# OBSTACLE RESULT NORMALIZATION
-# ============================================================
-
-def _has_obstacle(obstacle_result):
-    """
-    Normalize obstacle detection result.
-
-    Current movement.py returns:
-
-        True / False
-
-    But older code may return:
-
-        "true" / "false"
-
-    This helper safely supports both.
-    """
-
-    value = obstacle_result
-
-    if isinstance(value, bool):
-        return value
-
-    if isinstance(value, str):
-        return value.strip().lower() == "true"
-
-    return bool(value)
-
-
-def _normalize_command(command):
-    """
-    Normalize movement commands to the project's standard
-    uppercase command format.
+    Unknown command -> STOP.
     """
 
     if command is None:
+
         return SAFE_STOP_COMMAND
 
-    command = str(command).strip().upper()
+    command = str(
+        command
+    ).strip().upper()
 
-    if not command:
+    if command not in ALLOWED_COMMANDS:
+
         return SAFE_STOP_COMMAND
 
     return command
 
 
 # ============================================================
+# ROUTE MODE NORMALIZATION
+# ============================================================
+
+def _normalize_routing_mode(
+    routing_mode,
+):
+    """
+    Normalize routing mode.
+
+    Supported:
+
+        0
+        "0"
+        "google"
+
+        1
+        "1"
+        "self"
+    """
+
+    if isinstance(
+        routing_mode,
+        str,
+    ):
+
+        value = (
+            routing_mode
+            .strip()
+            .lower()
+        )
+
+        if value in {
+            "google",
+            "0",
+        }:
+
+            return GOOGLE_ROUTE
+
+        if value in {
+            "self",
+            "1",
+        }:
+
+            return SELF_ROUTE
+
+        return None
+
+    try:
+
+        value = int(
+            routing_mode
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+    if value in {
+        GOOGLE_ROUTE,
+        SELF_ROUTE,
+    }:
+
+        return value
+
+    return None
+
+
+# ============================================================
+# CAMERA SOURCE
+# ============================================================
+
+def _resolve_camera_source(
+    source,
+):
+    """
+    Convert numeric camera source strings into integer
+    indexes.
+
+    Example:
+
+        "0" -> 0
+        "1" -> 1
+
+    URLs remain strings.
+    """
+
+    if isinstance(
+        source,
+        str,
+    ):
+
+        value = source.strip()
+
+        if value.isdigit():
+
+            return int(
+                value
+            )
+
+        return value
+
+    return source
+
+
+# ============================================================
+# CAMERA FRAME
+# ============================================================
+
+def _get_camera_frame():
+    """
+    Capture one camera frame.
+
+    Camera errors never result in a fake "clear path".
+
+    None is returned and the caller will safely STOP.
+    """
+
+    source = _resolve_camera_source(
+        CAMERA_SOURCE
+    )
+
+    try:
+
+        return get_frame(
+            source
+        )
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
 # GOOGLE ROUTE
 # ============================================================
 
-def _get_google_points(origin, destination):
+def _build_google_route(
+    current_coords,
+    target_coords,
+):
     """
-    Fetch and decode a Google route.
+    Build a GPS waypoint route using Google Routes API.
 
-    Returns:
-        list of waypoint dictionaries
+    No fallback to self-routing is performed here.
 
-    Raises no exception outward; returns [] on failure.
+    The user selected the routing mode, so:
+
+        Google selected
+            ↓
+        Google failure
+            ↓
+        STOP
+
     """
 
     try:
 
         route_response = get_google_route(
-            origin,
-            destination
+            current_coords,
+            target_coords,
         )
 
-        if not route_response:
-            return []
+    except Exception as error:
+
+        with state_lock:
+
+            state.last_error = (
+                f"Google route error: {error}"
+            )
+
+        return []
+
+    if not route_response:
+
+        with state_lock:
+
+            state.last_error = (
+                "Google route was not returned."
+            )
+
+        return []
+
+    try:
 
         points = extract_route_points(
             route_response
         )
 
-        if not points:
-            return []
-
-        return points
-
     except Exception as error:
 
-        state.last_error = (
-            f"Google route error: {error}"
-        )
+        with state_lock:
+
+            state.last_error = (
+                f"Google polyline decode error: {error}"
+            )
 
         return []
-
-
-# ============================================================
-# SELF NAVIGATION — GRAPH SEARCH
-# ============================================================
-
-def _find_closest_vertex(coords):
-    """
-    Find the closest graph vertex to the given coordinates.
-
-    We intentionally do not depend on the current
-    close_coords.py implementation because that file
-    currently has import/structure issues in the repository.
-
-    Returns:
-        vertex name or None
-    """
-
-    current_point = to_tuple(coords)
-
-    closest_vertex = None
-    shortest_distance = float("inf")
-
-    for vertex, data in polypoints_db.items():
-
-        try:
-
-            vertex_point = (
-                float(data["lats"]),
-                float(data["longs"])
-            )
-
-        except (KeyError, TypeError, ValueError):
-            continue
-
-        distance = calculate_distance(
-            current_point,
-            vertex_point
-        )
-
-        if distance < shortest_distance:
-
-            shortest_distance = distance
-            closest_vertex = vertex
-
-    return closest_vertex
-
-
-# ============================================================
-# SELF NAVIGATION — SHORTEST PATH
-# ============================================================
-
-def _find_shortest_graph_path(
-    start_vertex,
-    end_vertex
-):
-    """
-    Find the shortest simple path in the current JUET graph.
-
-    The current campus graph is small, so exhaustive DFS is
-    acceptable for the prototype.
-
-    Returns:
-        tuple(path_vertices)
-
-    Example:
-        (
-            "A",
-            "A1",
-            "A2",
-            "A6",
-            "X"
-        )
-
-        Returns None when no path exists.
-    """
-
-    if start_vertex is None or end_vertex is None:
-        return None
-
-    if start_vertex not in juet_weighted_graph:
-        return None
-
-    if end_vertex not in juet_weighted_graph:
-        return None
-
-    best_path = None
-    best_distance = float("inf")
-
-    def dfs(
-        current_vertex,
-        current_path,
-        current_distance
-    ):
-        nonlocal best_path
-        nonlocal best_distance
-
-        # Target reached
-        if current_vertex == end_vertex:
-
-            if current_distance < best_distance:
-
-                best_distance = current_distance
-                best_path = tuple(current_path)
-
-            return
-
-        connections = juet_weighted_graph[
-            current_vertex
-        ].get(
-            "connections",
-            {}
-        )
-
-        for next_vertex, edge_distance in connections.items():
-
-            # Avoid cycles
-            if next_vertex in current_path:
-                continue
-
-            # Don't explore if already worse than known best path
-            new_distance = (
-                current_distance
-                + float(edge_distance)
-            )
-
-            if new_distance >= best_distance:
-                continue
-
-            dfs(
-                next_vertex,
-                current_path + [next_vertex],
-                new_distance
-            )
-
-    dfs(
-        start_vertex,
-        [start_vertex],
-        0.0
-    )
-
-    return best_path
-
-
-# ============================================================
-# SELF NAVIGATION — EDGE POLYLINE RESOLUTION
-# ============================================================
-
-def _find_edge_polyline(
-    start_vertex,
-    end_vertex
-):
-    """
-    Find the stored polyline between two connected graph
-    vertices.
-
-    The database may store:
-
-        A-B
-
-    or:
-
-        B-A
-
-    If reverse direction is used, the points are reversed.
-    """
-
-    forward_key = (
-        f"{start_vertex}-{end_vertex}"
-    )
-
-    reverse_key = (
-        f"{end_vertex}-{start_vertex}"
-    )
-
-    # --------------------------------------------------------
-    # Forward edge
-    # --------------------------------------------------------
-
-    if forward_key in polyline_database:
-
-        values = polyline_database[
-            forward_key
-        ]
-
-        points = []
-
-        for point in values.values():
-
-            try:
-
-                points.append({
-                    "point": len(points) + 1,
-                    "latitude": float(point["lats"]),
-                    "longitude": float(point["longs"])
-                })
-
-            except (KeyError, TypeError, ValueError):
-                continue
-
-        return points
-
-    # --------------------------------------------------------
-    # Reverse edge
-    # --------------------------------------------------------
-
-    if reverse_key in polyline_database:
-
-        values = polyline_database[
-            reverse_key
-        ]
-
-        points = []
-
-        for point in reversed(
-            list(values.values())
-        ):
-
-            try:
-
-                points.append({
-                    "point": len(points) + 1,
-                    "latitude": float(point["lats"]),
-                    "longitude": float(point["longs"])
-                })
-
-            except (KeyError, TypeError, ValueError):
-                continue
-
-        return points
-
-    return []
-
-
-# ============================================================
-# SELF NAVIGATION — PATH TO WAYPOINTS
-# ============================================================
-
-def _graph_path_to_points(path):
-    """
-    Convert a graph vertex path into a dense waypoint route
-    using the stored campus polylines.
-
-    Example:
-
-        A → A1 → A2
-
-    becomes the actual GPS points stored in:
-
-        A-A1
-        A1-A2
-    """
-
-    if not path:
-        return []
-
-    if len(path) == 1:
-
-        vertex = path[0]
-
-        point = polypoints_db.get(
-            vertex
-        )
-
-        if not point:
-            return []
-
-        return [{
-            "point": 1,
-            "latitude": float(point["lats"]),
-            "longitude": float(point["longs"])
-        }]
-
-    final_points = []
-
-    for index in range(
-        len(path) - 1
-    ):
-
-        start_vertex = path[index]
-        end_vertex = path[index + 1]
-
-        edge_points = _find_edge_polyline(
-            start_vertex,
-            end_vertex
-        )
-
-        if not edge_points:
-            continue
-
-        # Avoid duplicating the connecting point
-        if final_points:
-
-            last_point = final_points[-1]
-
-            first_edge_point = edge_points[0]
-
-            same_point = (
-                abs(
-                    last_point["latitude"]
-                    - first_edge_point["latitude"]
-                ) < 1e-8
-                and
-                abs(
-                    last_point["longitude"]
-                    - first_edge_point["longitude"]
-                ) < 1e-8
-            )
-
-            if same_point:
-
-                edge_points = edge_points[1:]
-
-        final_points.extend(
-            edge_points
-        )
-
-    # Re-number points cleanly
-    for index, point in enumerate(
-        final_points,
-        start=1
-    ):
-        point["point"] = index
-
-    return final_points
-
-
-# ============================================================
-# SELF ROUTE BUILDER
-# ============================================================
-
-def _get_self_route(
-    origin,
-    destination
-):
-    """
-    Build a complete campus route:
-
-        GPS origin
-            ↓
-        nearest graph vertex
-            ↓
-        shortest graph path
-            ↓
-        stored road polyline
-            ↓
-        waypoint list
-    """
-
-    start_vertex = _find_closest_vertex(
-        origin
-    )
-
-    end_vertex = _find_closest_vertex(
-        destination
-    )
-
-    if start_vertex is None:
-        raise ValueError(
-            "Could not resolve origin to campus graph"
-        )
-
-    if end_vertex is None:
-        raise ValueError(
-            "Could not resolve destination to campus graph"
-        )
-
-    path = _find_shortest_graph_path(
-        start_vertex,
-        end_vertex
-    )
-
-    if not path:
-        raise ValueError(
-            f"No campus route found from "
-            f"{start_vertex} to {end_vertex}"
-        )
-
-    points = _graph_path_to_points(
-        path
-    )
 
     if not points:
-        raise ValueError(
-            f"Graph route found {path}, "
-            f"but no polyline points were available"
-        )
+
+        with state_lock:
+
+            state.last_error = (
+                "Google route contained no usable points."
+            )
+
+        return []
 
     return points
 
 
 # ============================================================
-# ROUTE BUILDING
+# SELF ROUTE
 # ============================================================
 
-def _build_routes(
-    kart_coords,
-    marketplace_coords,
-    delivery_point,
-    routing_mode
+def _build_self_route(
+    current_coords,
+    target_coords,
 ):
     """
-    Build pickup and delivery routes ONCE for a mission.
+    Build a GPS waypoint route using the JUET self-routing
+    graph.
 
-    routing_mode:
-        1 -> self/campus route
-        0 -> Google route
+    Flow:
 
-    Returns:
-        receive_points,
-        deliver_points,
-        routing_source
+        current GPS
+             ↓
+        closest graph vertex
+             ↓
+        shortest graph path
+             ↓
+        stored polyline
+             ↓
+        GPS waypoints
     """
 
-    state.last_error = None
+    try:
 
-    # ========================================================
-    # SELF ROUTING
-    # ========================================================
+        route_result = short_distance(
+            current_coords,
+            target_coords,
+        )
+
+    except Exception as error:
+
+        with state_lock:
+
+            state.last_error = (
+                f"Self route search error: {error}"
+            )
+
+        return []
+
+    if not route_result:
+
+        with state_lock:
+
+            state.last_error = (
+                "Self route could not be created."
+            )
+
+        return []
+
+    try:
+
+        points = extract_polyline(
+            route_result
+        )
+
+    except Exception as error:
+
+        with state_lock:
+
+            state.last_error = (
+                f"Self route polyline error: {error}"
+            )
+
+        return []
+
+    if not points:
+
+        with state_lock:
+
+            state.last_error = (
+                "Self route contained no usable points."
+            )
+
+        return []
+
+    return points
+
+
+# ============================================================
+# ROUTE BUILDER
+# ============================================================
+
+def _build_route(
+    current_coords,
+    target_coords,
+    routing_mode,
+):
+    """
+    Build exactly ONE route:
+
+        current -> target
+
+    according to the routing mode chosen by the user.
+    """
+
+    if routing_mode == GOOGLE_ROUTE:
+
+        return _build_google_route(
+            current_coords,
+            target_coords,
+        )
 
     if routing_mode == SELF_ROUTE:
 
-        try:
-
-            receive_points = _get_self_route(
-                kart_coords,
-                marketplace_coords
-            )
-
-            # Delivery starts from marketplace
-            deliver_points = _get_self_route(
-                marketplace_coords,
-                delivery_point
-            )
-
-            return (
-                receive_points,
-                deliver_points,
-                "self"
-            )
-
-        except Exception as error:
-
-            state.last_error = (
-                f"Self route error: {error}"
-            )
-
-            return (
-                [],
-                [],
-                "self_failed"
-            )
-
-    # ========================================================
-    # GOOGLE ROUTING
-    # ========================================================
-
-    receive_points = _get_google_points(
-        kart_coords,
-        marketplace_coords
-    )
-
-    deliver_points = _get_google_points(
-        marketplace_coords,
-        delivery_point
-    )
-
-    # ========================================================
-    # GOOGLE FAILURE → CAMPUS FALLBACK
-    # ========================================================
-
-    if not receive_points:
-
-        try:
-
-            receive_points = _get_self_route(
-                kart_coords,
-                marketplace_coords
-            )
-
-            receive_source = True
-
-        except Exception:
-
-            receive_source = False
-
-    else:
-
-        receive_source = False
-
-    if not deliver_points:
-
-        try:
-
-            deliver_points = _get_self_route(
-                marketplace_coords,
-                delivery_point
-            )
-
-            delivery_source = True
-
-        except Exception:
-
-            delivery_source = False
-
-    else:
-
-        delivery_source = False
-
-    # ========================================================
-    # Determine actual source
-    # ========================================================
-
-    if (
-        receive_points
-        and deliver_points
-    ):
-
-        if (
-            receive_source
-            or delivery_source
-        ):
-            return (
-                receive_points,
-                deliver_points,
-                "google_with_self_fallback"
-            )
-
-        return (
-            receive_points,
-            deliver_points,
-            "google"
+        return _build_self_route(
+            current_coords,
+            target_coords,
         )
 
-    state.last_error = (
-        "Could not create a complete pickup "
-        "and delivery route"
+    return []
+
+
+# ============================================================
+# ROUTE KEY
+# ============================================================
+
+def _create_route_key(
+    target_coords,
+    routing_mode,
+):
+    """
+    Create an identity for the current route.
+
+    Current kart coordinates are intentionally NOT included.
+
+    The kart moves continuously, so putting current position
+    into the key would rebuild the route on every call.
+    """
+
+    latitude, longitude = to_tuple(
+        target_coords
     )
 
     return (
-        [],
-        [],
-        "route_failed"
+        round(
+            latitude,
+            7,
+        ),
+        round(
+            longitude,
+            7,
+        ),
+        int(
+            routing_mode
+        ),
     )
 
 
 # ============================================================
-# RESET PIPELINE
+# ROUTE INITIALIZATION
+# ============================================================
+
+def _ensure_route(
+    current_coords,
+    target_coords,
+    routing_mode,
+):
+    """
+    Build a new route only when the current target or routing
+    mode changes.
+
+    Otherwise continue using the cached route and existing
+    waypoint index.
+    """
+
+    route_key = _create_route_key(
+        target_coords,
+        routing_mode,
+    )
+
+    with state_lock:
+
+        route_already_exists = (
+            state.route_key == route_key
+            and bool(
+                state.route_points
+            )
+            and state.routing_mode == routing_mode
+        )
+
+    if route_already_exists:
+
+        return True
+
+
+    # --------------------------------------------------------
+    # New route
+    # --------------------------------------------------------
+
+    route_points = _build_route(
+        current_coords,
+        target_coords,
+        routing_mode,
+    )
+
+    if not route_points:
+
+        with state_lock:
+
+            state.route_key = route_key
+            state.route_points = []
+            state.waypoint_index = 0
+            state.routing_mode = routing_mode
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+
+        return False
+
+
+    with state_lock:
+
+        state.route_key = route_key
+
+        state.route_points = (
+            route_points
+        )
+
+        state.waypoint_index = 0
+
+        state.routing_mode = routing_mode
+
+        state.last_error = None
+
+        state.last_command = (
+            SAFE_STOP_COMMAND
+        )
+
+    return True
+
+
+# ============================================================
+# OBSTACLE DETECTION
+# ============================================================
+
+def _detect_obstacle(
+    frame,
+):
+    """
+    Run the normal YOLO obstacle detector.
+
+    Returns the detector result.
+
+    On detector failure, returns a STOP result.
+    """
+
+    try:
+
+        result = movement(
+            frame
+        )
+
+    except Exception as error:
+
+        return {
+            "obstacle_present": True,
+            "side": "CENTER",
+            "command": "STOP",
+            "obstacle_class": "detector_error",
+            "confidence": 1.0,
+            "danger_score": 1.0,
+            "error": str(error),
+        }
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
+        return {
+            "obstacle_present": True,
+            "side": "CENTER",
+            "command": "STOP",
+            "obstacle_class": "invalid_detector_result",
+            "confidence": 1.0,
+            "danger_score": 1.0,
+        }
+
+    return result
+
+
+# ============================================================
+# POTHOLE DETECTION
+# ============================================================
+
+def _detect_pothole(
+    frame,
+):
+    """
+    Run the optional pothole detector.
+
+    The existing pothole detector uses a separate trained
+    model.
+
+    If pothole detection is disabled, no pothole is reported.
+
+    If enabled but the detector cannot be loaded/executed,
+    STOP is returned for safety.
+    """
+
+    if not POTHOLE_DETECTION_ENABLED:
+
+        return {
+            "pothole_present": False,
+            "side": None,
+            "command": None,
+        }
+
+
+    # --------------------------------------------------------
+    # Lazy import
+    # --------------------------------------------------------
+    #
+    # This prevents the pothole model from being loaded merely
+    # because pipeline.py was imported.
+    #
+
+    try:
+
+        from .navigation_tools.pothole_detection import (
+            detect_pothole,
+        )
+
+    except Exception as error:
+
+        return {
+            "pothole_present": True,
+            "side": "CENTER",
+            "command": "STOP",
+            "error": (
+                f"Pothole detector unavailable: {error}"
+            ),
+        }
+
+
+    # --------------------------------------------------------
+    # Detector call
+    # --------------------------------------------------------
+
+    try:
+
+        result = detect_pothole(
+            frame
+        )
+
+    except Exception as error:
+
+        return {
+            "pothole_present": True,
+            "side": "CENTER",
+            "command": "STOP",
+            "error": (
+                f"Pothole detector error: {error}"
+            ),
+        }
+
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+
+        return {
+            "pothole_present": True,
+            "side": "CENTER",
+            "command": "STOP",
+            "error": (
+                "Invalid pothole detector result."
+            ),
+        }
+
+    return result
+
+
+# ============================================================
+# SAFETY ARBITRATION
+# ============================================================
+
+def _safety_command(
+    obstacle_result,
+    pothole_result,
+):
+    """
+    Combine obstacle and pothole detector outputs.
+
+    Safety rules:
+
+        CENTER obstacle → STOP
+        CENTER pothole  → STOP
+
+        LEFT only        → SR
+        RIGHT only       → SL
+
+        Conflicting detections → STOP
+
+    The vision system has priority over navigation.
+    """
+
+    obstacle_present = bool(
+        obstacle_result.get(
+            "obstacle_present",
+            False,
+        )
+    )
+
+    pothole_present = bool(
+        pothole_result.get(
+            "pothole_present",
+            False,
+        )
+    )
+
+
+    # ========================================================
+    # NOTHING DETECTED
+    # ========================================================
+
+    if (
+        not obstacle_present
+        and not pothole_present
+    ):
+
+        return None
+
+
+    # ========================================================
+    # COLLECT SIDES
+    # ========================================================
+
+    sides = []
+
+    if obstacle_present:
+
+        obstacle_side = str(
+            obstacle_result.get(
+                "side",
+                "CENTER",
+            )
+        ).upper()
+
+        sides.append(
+            obstacle_side
+        )
+
+
+    if pothole_present:
+
+        pothole_side = str(
+            pothole_result.get(
+                "side",
+                "CENTER",
+            )
+        ).upper()
+
+        sides.append(
+            pothole_side
+        )
+
+
+    # ========================================================
+    # ANY CENTER HAZARD
+    # ========================================================
+
+    if "CENTER" in sides:
+
+        return SAFE_STOP_COMMAND
+
+
+    # ========================================================
+    # CONFLICTING SIDES
+    # ========================================================
+
+    unique_sides = set(
+        sides
+    )
+
+    if (
+        "LEFT" in unique_sides
+        and
+        "RIGHT" in unique_sides
+    ):
+
+        return SAFE_STOP_COMMAND
+
+
+    # ========================================================
+    # ONLY LEFT
+    # ========================================================
+
+    if unique_sides == {
+        "LEFT"
+    }:
+
+        return "SR"
+
+
+    # ========================================================
+    # ONLY RIGHT
+    # ========================================================
+
+    if unique_sides == {
+        "RIGHT"
+    }:
+
+        return "SL"
+
+
+    # ========================================================
+    # UNKNOWN SAFETY STATE
+    # ========================================================
+
+    return SAFE_STOP_COMMAND
+
+
+# ============================================================
+# DESTINATION ARRIVAL
+# ============================================================
+
+def _has_reached_target(
+    current_coords,
+    target_coords,
+):
+    """
+    Check whether the kart is within the 7m destination
+    threshold.
+    """
+
+    try:
+
+        current_point = to_tuple(
+            current_coords
+        )
+
+        target_point = to_tuple(
+            target_coords
+        )
+
+        distance = calculate_distance(
+            current_point,
+            target_point,
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return False
+
+
+    return (
+        distance
+        <= ARRIVAL_THRESHOLD
+    )
+
+
+# ============================================================
+# ROUTE RESET
 # ============================================================
 
 def reset_pipeline():
     """
-    Reset the current robot mission.
+    Clear the current route and waypoint progress.
 
-    Call this when:
-        - a new order starts
-        - old mission is cancelled
-        - a completed mission must be restarted
+    Navigation API can call this when a mission is cancelled
+    or when a completely fresh route must be established.
     """
 
     global state
@@ -793,556 +1099,370 @@ def reset_pipeline():
 
 
 # ============================================================
-# PIPELINE STATE FOR DASHBOARD / API
+# PIPELINE STATE
 # ============================================================
 
 def get_pipeline_state():
     """
-    Return a safe snapshot of current navigation state.
+    Return the current autonomous driving state.
 
-    This will be useful later for the robot dashboard.
+    Useful later for telemetry/dashboard.
     """
 
     with state_lock:
 
         return {
-            "active": state.active,
-            "phase": state.phase,
-            "routing_mode": state.routing_mode,
-            "routing_source": state.routing_source,
-            "receive_waypoint_index": (
-                state.receive_waypoint_index
+            "route_active": bool(
+                state.route_points
             ),
-            "deliver_waypoint_index": (
-                state.deliver_waypoint_index
+            "routing_mode": (
+                state.routing_mode
             ),
-            "receive_points_count": len(
-                state.receive_points
+            "waypoint_index": (
+                state.waypoint_index
             ),
-            "deliver_points_count": len(
-                state.deliver_points
+            "route_points_count": len(
+                state.route_points
             ),
-            "last_command": state.last_command,
-            "last_error": state.last_error,
+            "last_command": (
+                state.last_command
+            ),
+            "last_error": (
+                state.last_error
+            ),
         }
 
 
 # ============================================================
-# MAIN PIPELINE
+# MAIN AUTONOMOUS PIPELINE
 # ============================================================
 
 def pipeline(
-    mp,
-    k,
-    dp,
-    He,
-    sd
+    current_coords,
+    target_coords,
+    heading,
+    routing_mode,
 ):
     """
-    Main autonomous decision pipeline.
+    Establish autonomous driving between:
+
+        CURRENT KART LOCATION
+                  ↓
+             TARGET LOCATION
+
     Parameters
     ----------
-    mp:
-        Marketplace coordinates.
-    k:
-        Current kart coordinates.
-    dp:
-        Delivery destination.
-    He:
-        Current kart heading.
-    sd:
-        Routing mode:
-            1 -> self/campus graph
-            0 -> Google route
+    current_coords:
+        Current kart GPS position.
+
+    target_coords:
+        Current target GPS position.
+
+    heading:
+        Current kart heading from IMU/compass.
+
+    routing_mode:
+        0 -> Google
+        1 -> Self
+
     Returns
     -------
-    str:
-        One movement command:
-            F
-            SR
-            SL
-            R
-            L
-            STOP
+    str
+
+        F
+        SR
+        SL
+        R
+        L
+        STOP
     """
 
-    global state
-
     # ========================================================
-    # SAFETY: ACQUIRE CAMERA FRAME
-    # ========================================================
-
-    try:
-        frame = get_frame()
-
-    except Exception as error:
-
-        with state_lock:
-            state.last_error = (
-                f"Camera frame error: {error}"
-            )
-            state.last_command = SAFE_STOP_COMMAND
-
-        return SAFE_STOP_COMMAND
-
-    # ========================================================
-    # SAFETY: OBSTACLE DETECTION
+    # VALIDATE CURRENT COORDINATES
     # ========================================================
 
     try:
 
-        obstacle_result = movement(
-            frame
+        to_tuple(
+            current_coords
         )
 
-    except Exception as error:
+    except (
+        TypeError,
+        ValueError,
+    ) as error:
 
         with state_lock:
+
             state.last_error = (
-                f"Obstacle detector error: {error}"
+                f"Invalid current coordinates: {error}"
             )
-            state.last_command = SAFE_STOP_COMMAND
 
-        return SAFE_STOP_COMMAND
-
-    obstacle_present = _has_obstacle(
-        obstacle_result.get(
-            "obstacle_present",
-            False
-        )
-    )
-
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # Obstacle safety has priority over navigation.
-    # --------------------------------------------------------
-
-    if obstacle_present:
-
-        obstacle_command = _normalize_command(
-            obstacle_result.get(
-                "command",
+            state.last_command = (
                 SAFE_STOP_COMMAND
             )
-        )
 
-        # Only allow known movement commands.
-        allowed_commands = {
-            "F",
-            "SR",
-            "SL",
-            "R",
-            "L",
-            "STOP"
-        }
+        return SAFE_STOP_COMMAND
 
-        if obstacle_command not in allowed_commands:
-
-            obstacle_command = SAFE_STOP_COMMAND
-
-        with state_lock:
-            state.last_command = (
-                obstacle_command
-            )
-
-        return obstacle_command
 
     # ========================================================
-    # VALIDATE ROUTING MODE
+    # VALIDATE TARGET COORDINATES
     # ========================================================
 
     try:
 
-        routing_mode = int(sd)
+        to_tuple(
+            target_coords
+        )
 
-    except (TypeError, ValueError):
+    except (
+        TypeError,
+        ValueError,
+    ) as error:
 
-        routing_mode = GOOGLE_ROUTE
+        with state_lock:
 
-    if routing_mode not in {
-        SELF_ROUTE,
-        GOOGLE_ROUTE
-    }:
+            state.last_error = (
+                f"Invalid target coordinates: {error}"
+            )
 
-        routing_mode = GOOGLE_ROUTE
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+
+        return SAFE_STOP_COMMAND
+
 
     # ========================================================
-    # CREATE / DETECT CURRENT MISSION
+    # NORMALIZE ROUTING MODE
     # ========================================================
 
-    mission_key = _mission_key(
-        mp,
-        dp,
+    routing_mode = _normalize_routing_mode(
         routing_mode
     )
 
-    with state_lock:
-
-        should_initialize = (
-            not state.active
-            and state.phase != "COMPLETE"
-        )
-
-        mission_changed = (
-            state.mission_key != mission_key
-        )
-
-        if mission_changed:
-
-            should_initialize = True
-
-    # ========================================================
-    # INITIALIZE ROUTES
-    # ========================================================
-
-    if should_initialize:
-
-        (
-            receive_points,
-            deliver_points,
-            routing_source
-        ) = _build_routes(
-            kart_coords=k,
-            marketplace_coords=mp,
-            delivery_point=dp,
-            routing_mode=routing_mode
-        )
-
-        if (
-            not receive_points
-            or not deliver_points
-        ):
-
-            with state_lock:
-
-                state.active = False
-                state.mission_key = mission_key
-                state.routing_mode = routing_mode
-                state.routing_source = routing_source
-                state.phase = "IDLE"
-                state.receive_points = []
-                state.deliver_points = []
-                state.receive_waypoint_index = 0
-                state.deliver_waypoint_index = 0
-                state.last_command = SAFE_STOP_COMMAND
-
-                if not state.last_error:
-                    state.last_error = (
-                        "Route initialization failed"
-                    )
-
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Store new mission state
-        # ----------------------------------------------------
+    if routing_mode is None:
 
         with state_lock:
 
-            state.active = True
-
-            state.mission_key = (
-                mission_key
+            state.last_error = (
+                "Invalid routing mode."
             )
 
-            state.routing_mode = (
-                routing_mode
-            )
-
-            state.routing_source = (
-                routing_source
-            )
-
-            state.phase = "TO_PICKUP"
-
-            state.receive_points = (
-                receive_points
-            )
-
-            state.deliver_points = (
-                deliver_points
-            )
-
-            state.receive_waypoint_index = 0
-            state.deliver_waypoint_index = 0
-
-            state.last_command = (
-                SAFE_STOP_COMMAND
-            )
-
-            state.last_error = None
-
-    # ========================================================
-    # CURRENT PHASE SNAPSHOT
-    # ========================================================
-
-    with state_lock:
-
-        phase = state.phase
-
-        receive_points = list(
-            state.receive_points
-        )
-
-        deliver_points = list(
-            state.deliver_points
-        )
-
-        receive_index = (
-            state.receive_waypoint_index
-        )
-
-        deliver_index = (
-            state.deliver_waypoint_index
-        )
-
-    # ========================================================
-    # COMPLETED MISSION
-    # ========================================================
-
-    if phase == "COMPLETE":
-
-        with state_lock:
             state.last_command = (
                 SAFE_STOP_COMMAND
             )
 
         return SAFE_STOP_COMMAND
 
+
     # ========================================================
-    # PHASE 1:
-    # KART → MARKETPLACE
+    # CAMERA
     # ========================================================
+    #
+    # Camera failure is treated as unsafe because the
+    # obstacle-detection layer cannot verify the path.
+    #
 
-    if phase == "TO_PICKUP":
+    frame = _get_camera_frame()
 
-        # ----------------------------------------------------
-        # Direct destination arrival check
-        # ----------------------------------------------------
-
-        try:
-
-            distance_to_marketplace = (
-                calculate_distance(
-                    to_tuple(k),
-                    to_tuple(mp)
-                )
-            )
-
-        except Exception as error:
-
-            with state_lock:
-                state.last_error = (
-                    f"Pickup distance error: {error}"
-                )
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Marketplace reached
-        # ----------------------------------------------------
-
-        if (
-            distance_to_marketplace
-            <= ARRIVAL_THRESHOLD
-        ):
-
-            with state_lock:
-
-                # Automatically begin delivery phase
-                # after reaching marketplace.
-                state.phase = "TO_DELIVERY"
-
-                # Reset delivery waypoint progress.
-                state.deliver_waypoint_index = 0
-
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-
-            # Return STOP for this cycle.
-            # Next cycle starts delivery navigation.
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Continue pickup route
-        # ----------------------------------------------------
-
-        navigation_result = navigate(
-            heading=He,
-            current_coords=k,
-            points=receive_points,
-            waypoint_index=receive_index
-        )
-
-        new_index = navigation_result.get(
-            "waypoint_index",
-            receive_index
-        )
-
-        command = _normalize_command(
-            navigation_result.get(
-                "command",
-                SAFE_STOP_COMMAND
-            )
-        )
-
-        route_complete = bool(
-            navigation_result.get(
-                "route_complete",
-                False
-            )
-        )
-
-        # ----------------------------------------------------
-        # Route endpoint reached
-        # ----------------------------------------------------
-
-        if route_complete:
-
-            with state_lock:
-
-                state.phase = "TO_DELIVERY"
-
-                state.receive_waypoint_index = (
-                    new_index
-                )
-
-                state.deliver_waypoint_index = 0
-
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Save progress
-        # ----------------------------------------------------
+    if frame is None:
 
         with state_lock:
 
-            state.receive_waypoint_index = (
-                new_index
+            state.last_error = (
+                "Camera frame unavailable."
             )
 
-            state.last_command = command
-
-        return command
-
-    # ========================================================
-    # PHASE 2:
-    # MARKETPLACE → DELIVERY
-    # ========================================================
-
-    if phase == "TO_DELIVERY":
-
-        # ----------------------------------------------------
-        # Direct destination arrival check
-        # ----------------------------------------------------
-
-        try:
-
-            distance_to_delivery = (
-                calculate_distance(
-                    to_tuple(k),
-                    to_tuple(dp)
-                )
-            )
-
-        except Exception as error:
-
-            with state_lock:
-                state.last_error = (
-                    f"Delivery distance error: {error}"
-                )
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Delivery reached
-        # ----------------------------------------------------
-
-        if (
-            distance_to_delivery
-            <= ARRIVAL_THRESHOLD
-        ):
-
-            with state_lock:
-
-                state.phase = "COMPLETE"
-
-                state.active = True
-
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-
-            return SAFE_STOP_COMMAND
-
-        # ----------------------------------------------------
-        # Continue delivery route
-        # ----------------------------------------------------
-        navigation_result = navigate(
-            heading=He,
-            current_coords=k,
-            points=deliver_points,
-            waypoint_index=deliver_index
-        )
-        new_index = navigation_result.get(
-            "waypoint_index",
-            deliver_index
-        )
-        command = _normalize_command(
-            navigation_result.get(
-                "command",
+            state.last_command = (
                 SAFE_STOP_COMMAND
             )
-        )
-        route_complete = bool(
-            navigation_result.get(
-                "route_complete",
-                False
-            )
-        )
-        # ----------------------------------------------------
-        # Route complete
-        # ----------------------------------------------------
-        if route_complete:
-            with state_lock:
-                state.phase = "COMPLETE"
-                state.deliver_waypoint_index = (
-                    new_index
-                )
-                state.last_command = (
-                    SAFE_STOP_COMMAND
-                )
-            return SAFE_STOP_COMMAND
-        # ----------------------------------------------------
-        # Save progress
-        # ----------------------------------------------------
-        with state_lock:
-            state.deliver_waypoint_index = (
-                new_index
-            )
-            state.last_command = command
-        return command
+
+        return SAFE_STOP_COMMAND
+
+
     # ========================================================
-    # UNKNOWN STATE
+    # OBSTACLE DETECTION
+    # ========================================================
+
+    obstacle_result = _detect_obstacle(
+        frame
+    )
+
+
+    # ========================================================
+    # POTHOLE DETECTION
+    # ========================================================
+
+    pothole_result = _detect_pothole(
+        frame
+    )
+
+
+    # ========================================================
+    # SAFETY PRIORITY
+    # ========================================================
+
+    safety_command = _safety_command(
+        obstacle_result,
+        pothole_result,
+    )
+
+    if safety_command is not None:
+
+        with state_lock:
+
+            state.last_command = (
+                safety_command
+            )
+
+            # Store any detector error for telemetry/debugging.
+
+            detector_error = (
+                obstacle_result.get(
+                    "error"
+                )
+                or
+                pothole_result.get(
+                    "error"
+                )
+            )
+
+            if detector_error:
+
+                state.last_error = (
+                    str(
+                        detector_error
+                    )
+                )
+
+        return safety_command
+
+
+    # ========================================================
+    # DESTINATION REACHED
+    # ========================================================
+
+    if _has_reached_target(
+        current_coords,
+        target_coords,
+    ):
+
+        with state_lock:
+
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+
+        return SAFE_STOP_COMMAND
+
+
+    # ========================================================
+    # BUILD / REUSE ROUTE
+    # ========================================================
+
+    route_ready = _ensure_route(
+        current_coords,
+        target_coords,
+        routing_mode,
+    )
+
+    if not route_ready:
+
+        with state_lock:
+
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+
+        return SAFE_STOP_COMMAND
+
+
+    # ========================================================
+    # GET CURRENT ROUTE STATE
+    # ========================================================
+
+    with state_lock:
+
+        route_points = list(
+            state.route_points
+        )
+
+        waypoint_index = (
+            state.waypoint_index
+        )
+
+
+    # ========================================================
+    # AUTONOMOUS NAVIGATION
+    # ========================================================
+    try:
+        navigation_result = navigate(
+            heading=heading,
+            current_coords=current_coords,
+            points=route_points,
+            waypoint_index=waypoint_index,
+        )
+    except Exception as error:
+        with state_lock:
+            state.last_error = (
+                f"Navigation error: {error}"
+            )
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+        return SAFE_STOP_COMMAND
+    # ========================================================
+    # UPDATE WAYPOINT PROGRESS
+    # ========================================================
+    new_waypoint_index = navigation_result.get(
+        "waypoint_index",
+        waypoint_index,
+    )
+    try:
+        new_waypoint_index = int(
+            new_waypoint_index
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        new_waypoint_index = (
+            waypoint_index
+        )
+    # ========================================================
+    # ROUTE COMPLETE
+    # ========================================================
+    route_complete = bool(
+        navigation_result.get(
+            "route_complete",
+            False,
+        )
+    )
+    if route_complete:
+        with state_lock:
+            state.waypoint_index = (
+                new_waypoint_index
+            )
+            state.last_command = (
+                SAFE_STOP_COMMAND
+            )
+        return SAFE_STOP_COMMAND
+    # ========================================================
+    # COMMAND
+    # ========================================================
+    command = _normalize_command(
+        navigation_result.get(
+            "command",
+            SAFE_STOP_COMMAND,
+        )
+    )
+    # ========================================================
+    # SAVE STATE
     # ========================================================
     with state_lock:
-        state.active = False
-        state.phase = "IDLE"
-        state.last_error = (
-            f"Invalid pipeline phase: {phase}"
+        state.waypoint_index = (
+            new_waypoint_index
         )
-        state.last_command = (
-            SAFE_STOP_COMMAND
-        )
-    return SAFE_STOP_COMMAND
+        state.last_command = command
+    return command
